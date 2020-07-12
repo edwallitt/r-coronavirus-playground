@@ -1,0 +1,666 @@
+---
+title: "Visualising Coronavirus"
+output:
+  html_document:
+    df_print: paged
+    toc: true
+---
+
+# Libraries and Data
+
+```{r}
+library(pacman)
+pacman::p_load(
+  tidyquant,
+  readr,
+  ggplot2,
+  dplyr,
+  knitr,
+  ggthemes
+)
+
+# data available at
+# https://www.ecdc.europa.eu/en/publications-data/download-todays-data-geographic-distribution-covid-19-cases-worldwide
+data <- read.csv("https://opendata.ecdc.europa.eu/covid19/casedistribution/csv", na.strings = "", fileEncoding = "UTF-8-BOM")
+```
+
+# Covid Library
+
+[Documentation](https://github.com/RamiKrispin/coronavirus)
+
+Another useful way to get data and daily updates is with the covid library which can be installed as follows:
+
+
+```{r,eval=FALSE}
+devtools::install_github("RamiKrispin/coronavirus")
+```
+We can then include it and get updates with
+
+```{r}
+library(coronavirus)
+update_dataset()
+```
+
+To use the dataset we can do the following:
+
+```{r}
+data("coronavirus")
+```
+
+And then take a look and the data we have available
+
+```{r}
+glimpse(coronavirus)
+```
+
+Now let's try a simple plot of UK confirmed case count
+
+```{r cv-uk-case-count}
+uk <- coronavirus %>%
+  filter(country == "United Kingdom") %>%
+  filter(type == "confirmed" & cases > 0 & province == "") %>%
+  select(-lat, -long, -country) %>%
+  arrange(date)
+
+uk
+```
+
+```{r}
+ggplot(uk, aes(date, cases)) +
+  geom_line() +
+  geom_point(alpha=0.2) +
+  geom_smooth(se=FALSE) +
+  labs(
+    title = "Confirmed UK Coronavirus Cases",
+    x = "Confirmed Cases",
+    y = "Date"
+  ) +
+  theme_tufte()
+```
+
+
+
+Some simple examples
+
+**Top 20 countries**
+
+```{r}
+library(dplyr)
+
+summary_df <- coronavirus %>% 
+  filter(type == "confirmed") %>%
+  group_by(country) %>%
+  summarise(total_cases = sum(cases)) %>%
+  arrange(-total_cases)
+summary_df
+```
+
+New cases in past 24 hours
+
+```{r}
+library(tidyr)
+coronavirus %>% 
+  filter(date == max(date)) %>%
+  select(country, type, cases) %>%
+  group_by(country, type) %>%
+  summarise(total_cases = sum(cases)) %>%
+  pivot_wider(names_from = type,
+              values_from = total_cases) %>%
+  arrange(-confirmed)
+```
+
+Plotting cases
+
+```{r}
+library(plotly)
+
+coronavirus %>% 
+  group_by(type, date) %>%
+  summarise(total_cases = sum(cases)) %>%
+  pivot_wider(names_from = type, values_from = total_cases) %>%
+  arrange(date) %>%
+  mutate(active = confirmed - death - recovered) %>%
+  mutate(active_total = cumsum(active),
+                recovered_total = cumsum(recovered),
+                death_total = cumsum(death)) %>%
+  plot_ly(x = ~ date,
+                  y = ~ active_total,
+                  name = 'Active', 
+                  fillcolor = '#1f77b4',
+                  type = 'scatter',
+                  mode = 'none', 
+                  stackgroup = 'one') %>%
+  add_trace(y = ~ death_total, 
+             name = "Death",
+             fillcolor = '#E41317') %>%
+  add_trace(y = ~recovered_total, 
+            name = 'Recovered', 
+            fillcolor = 'forestgreen') %>%
+  layout(title = "Distribution of Covid19 Cases Worldwide",
+         legend = list(x = 0.1, y = 0.9),
+         yaxis = list(title = "Number of Cases"),
+         xaxis = list(title = "Source: Johns Hopkins University Center for Systems Science and Engineering"))
+```
+
+**Teemap plot**
+
+```{r}
+conf_df <- coronavirus %>% 
+  filter(type == "confirmed") %>%
+  group_by(country) %>%
+  summarise(total_cases = sum(cases)) %>%
+  arrange(-total_cases) %>%
+  mutate(parents = "Confirmed") %>%
+  ungroup() 
+  
+  plot_ly(data = conf_df,
+          type= "treemap",
+          values = ~total_cases,
+          labels= ~ country,
+          parents=  ~parents,
+          domain = list(column=0),
+          name = "Confirmed",
+          textinfo="label+value+percent parent")
+```
+
+
+## 3. Basic global daily trends
+
+Let's create a date rather than having day, month, year
+
+```{r}
+data$Date <- as.Date(paste(data$year, data$month, data$day, sep="-"), "%Y-%m-%d")
+glimpse(data)
+```
+
+
+Let's create a date and calculate the cumulative total for each day
+
+```{r}
+daily_global_counts <- data %>%
+  group_by(Date) %>%
+  summarise(
+    total_cases = sum(cases),
+    total_deaths = sum(deaths)
+  )
+daily_global_counts
+```
+
+We do a quick sanity check by plotting this data on a line graph (as it is time based)
+
+```{r}
+ggplot(daily_global_counts, aes(Date, total_cases)) +
+  geom_point(alpha=0.4) +
+  geom_line() +
+  geom_smooth(se=FALSE, alpha=0.5, linetype=3) +
+  labs(
+    title = "Global COVID-19 Cases\nper day"
+  ) +
+  ylab('New Cases') + xlab('Date') +
+  theme_minimal()
+```
+
+And the same for deaths
+
+```{r}
+ggplot(daily_global_counts, aes(Date, total_deaths)) +
+  geom_point(alpha = 0.2) +
+  geom_line() +
+  geom_smooth(se=FALSE) +
+  labs(
+    title = "Cumulative COVID-19 Cases\nper day",
+    ylab = "Deaths",
+    xlab = "Date"
+  ) +
+  theme_minimal()
+```
+
+
+## Cumulative Global Data
+
+The table above shows the cumulative confirmed cases of COVID-19 worldwide by date. Just reading numbers in a table makes it hard to get a sense of the scale and growth of the outbreak. Let's draw a line plot to visualize the confirmed cases worldwide.
+
+```{r}
+daily_global_counts
+```
+
+We do the cumulative counts
+
+```{r}
+daily_global_counts$cum_cases = cumsum(daily_global_counts$total_cases)
+daily_global_counts$cum_deaths = cumsum(daily_global_counts$total_deaths)
+```
+
+And plot
+
+```{r}
+cum_cases_plot <- ggplot(daily_global_counts, aes(Date, cum_cases)) +
+  geom_point() + 
+  geom_line() +
+  labs(xlab = "Date", ylab="Cumulative confirmed cases", title="Cumulative COVID-19 confirmed cases over time")
+
+cum_cases_plot
+```
+
+And the log10 version on the y axis
+
+```{r}
+cum_cases_plot + 
+  scale_y_log10() +
+  labs(
+    title = "Cumulative cases (log10)",
+    caption = "Source: "
+  )
+```
+
+## By country
+
+
+
+Let's now group by countries and look at individual national trends across the world
+
+```{r}
+by_country <- data %>%
+  group_by(countriesAndTerritories) %>%
+  summarise(
+    total_cases = sum(cases),
+    total_deaths = sum(deaths)
+  )
+by_country
+
+```
+
+This is useful but it would also be useful to have some cumulative case and death counts for every country so that we can filter countries we wish to examine
+
+```{r}
+top_cases_by_country <- by_country %>%
+  filter(total_cases > 100000) %>%
+  arrange(desc(total_cases))
+top_cases_by_country
+```
+
+We can show this on a vertical barchart
+
+```{r}
+
+library(RColorBrewer)
+palette <- brewer.pal(5, "RdYlBu")[-(2:4)]
+
+global_mean <- median(top_cases_by_country$total_cases)
+x_start <- global_mean + 20000
+y_start <- 5.5
+x_end <- global_mean
+y_end <- 7.5
+
+ggplot(top_cases_by_country, aes(total_cases, countriesAndTerritories, color=total_cases)) +
+  geom_point(size = 6) +
+  geom_segment(aes(xend=100000, yend=countriesAndTerritories), size=1) +
+  geom_text(aes(label = total_cases), color="white", size=1.5) +
+  scale_x_continuous("", expand=c(0,0), limits=c(50000,2000000), position="top") +
+  scale_color_gradientn(colors = palette) +
+  labs(
+    title = 'Top Countries by Confirmed Cases',
+    captions = 'Source: opendata.org'
+  ) +
+  theme_minimal() +
+  theme(
+    axis.line.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.title = element_blank(),
+    axis.text = element_text(color = "black"),
+    legend.position = "none"
+  ) +
+  geom_vline(xintercept = global_mean, color="grey40", linetype=3) +
+    annotate(
+    "text", 
+    x = x_start, 
+    y = y_start, 
+    label="The\nglobal\naverage",
+    vjust = 1, size = 3, color="grey40"
+  ) +
+  annotate(
+    "curve",
+    x = x_start, y=y_start,
+    xend = x_end, yend = y_end,
+    arrow = arrow(
+      length = unit(0.2, "cm"),
+      type = "closed"
+    ),
+    color="grey40"
+  )
+  
+```
+
+
+## 4. Normal vs under-reporting of deaths
+
+Let's make a faceted view for each country of the cumulative cases
+Displaying multiple countries as a facet
+
+
+```{r}
+
+by_country <- data %>%
+  group_by(countriesAndTerritories, Date) %>%
+  filter(countriesAndTerritories %in% c('China', 'Italy', 'Sweden', 'France', 'Iran', 'Brazil', 'India')) %>%
+  summarise(
+    total_cases = sum(cases),
+    total_deaths = sum(deaths)
+  ) %>%
+  mutate(
+    cum_cases = cumsum(total_cases),
+    cum_deaths = cumsum(total_deaths)
+  )
+  
+by_country
+
+ggplot(by_country) + 
+  geom_line(aes(Date, total_cases), color='blue') +
+  facet_wrap(~countriesAndTerritories, ncol=2, scale="free_y") +
+  geom_col(aes(Date, total_deaths), color='red') +
+  labs(
+    title="Cases and Deaths for COVID-19",
+    subtitle="Shown for select countries with stark\ndifference between reported case/death ratios",
+    ylab = "Cases & Deaths"
+  ) +
+  theme_clean()
+  
+  
+  
+  
+  
+```
+
+It is clear that in some countries there under-reporting of deaths. Let's separate out some key suspects
+
+```{r}
+under_reporting <- by_country %>%
+  filter(countriesAndTerritories %in% c('China', 'Brazil', 'Iran'))
+
+ggplot(under_reporting) + 
+  geom_line(aes(Date, total_cases), color="steelblue") +
+  facet_wrap(~countriesAndTerritories) +
+  geom_col(aes(Date, total_deaths), color='red') +
+  labs(
+    title="Countries potentially underreporting case/death ratio"
+  ) +
+  theme_tq()
+```
+
+Compared to more typical countries
+
+```{r}
+ord_reporting <- by_country %>%
+  filter(countriesAndTerritories %in% c('France', 'Italy', 'United_Kingdom'))
+
+ggplot(ord_reporting) + 
+  geom_line(aes(Date, total_cases), color="steelblue") +
+  facet_wrap(~countriesAndTerritories) +
+  geom_col(aes(Date, total_deaths), color='red') +
+  labs(
+    title="Countries reporting typical case/death ratios"
+  ) +
+  theme_tq()
+```
+
+## 5. UK Cases Rate and Rolling Functions
+
+Prepare the data as usual by getting 
+
+```{r}
+uk_data <- data %>%
+  filter(countriesAndTerritories == 'United_Kingdom') %>%
+  group_by(Date) %>%
+  arrange(Date) %>%
+  summarise(
+    total_cases = sum(cases),
+    total_deaths = sum(deaths)
+  ) %>%
+  mutate(
+    cum_cases = cumsum(total_cases),
+    cum_deaths = cumsum(total_deaths)
+  )
+  # summarize(
+  #   cum_sizes  = cumsum(cases),
+  #   cum_deaths = cumsum(deaths)
+  # )
+uk_data
+```
+
+Now let's plot the total daily cases and the cumulative cases:
+
+```{r}
+require(gridExtra)
+plot1 <- ggplot(uk_data, aes(Date, total_cases)) +
+  geom_line() +
+  labs(
+    title = 'UK Cases per day',
+    subtitle = 'Jan, 2020 to June 2020',
+    caption = 'Source: Open Data',
+    ylab = 'Total cases'
+  ) +
+  ylim(0, 7500)
+plot2 <- ggplot(uk_data, aes(Date, total_deaths)) +
+  geom_line() +
+  labs(
+    title = 'UK Deaths per day',
+    subtitle = 'Jan, 2020 to June 2020',
+    caption = 'Source: Open Data',
+    ylab = 'Total Deaths'
+  ) +
+  ylim(0, 7500)
+
+grid.arrange(plot1, plot2, nrow=1)
+```
+
+```{r}
+library(tidyquant)
+library(zoo)
+
+uk_roll_mean <- uk_data %>%
+  tq_mutate(
+    select = total_cases,
+    mutate_fun = rollapply,
+    width = 30,
+    align = 'right',
+    FUN = mean,
+    na.rm = TRUE,
+    col_rename = "mean_30"
+  ) %>%
+ tq_mutate(
+    select     = total_cases,
+    mutate_fun = rollapply,
+    width      = 90,
+    align      = "right",
+    FUN        = mean,
+    na.rm      = TRUE,
+    col_rename = "mean_90"
+  )
+
+uk_roll_mean %>%
+  ggplot(aes(Date, total_cases)) +
+    # geom_point(alpha=0.2) +
+    geom_line(aes(Date, mean_30), color= palette_light()[[1]], size = 1, linetype = 1) +
+    geom_line(aes(Date, mean_90), color= palette_light()[[2]], size = 1, linetype = 1) +
+    labs(
+      title = "UK Cases per day",
+      subtitle = "Showing 30 and 90 days moving averages"
+    ) +
+    scale_color_tq() +
+    theme(legend.position = "none")
+    
+
+```
+
+### Rolling custom functions
+
+```{r}
+# Custom function to return mean, sd, 95% conf interval
+custom_rolling_stats <- function(x, na.rm = TRUE) {
+    # x     = numeric vector
+    # na.rm = boolean, whether or not to remove NA's
+    
+    m  <- mean(x, na.rm = na.rm)
+    s  <- sd(x, na.rm = na.rm)
+    hi <- m + 2*s
+    lo <- m - 2*s
+    
+    ret <- c(mean = m, stdev = s, hi.95 = hi, lo.95 = lo) 
+    return(ret)
+}
+```
+
+Now we can use this function on our UK cases data
+
+```{r}
+uk_data_rollstats <- uk_data %>%
+  tq_mutate(
+    select = total_cases,
+    mutate_fun = rollapply,
+    width = 30,
+    align = "right",
+    by.column = FALSE,
+    FUN = custom_rolling_stats,
+    na.rm = TRUE
+  )
+
+uk_data_rollstats
+```
+
+We now have the data to view
+
+1. Rolling average (trend)
+2. 95% confidence interval (volatility)
+
+Let's plot this in a Bollinger Bands style
+
+```{r}
+uk_data_rollstats %>%
+  ggplot(aes(Date)) +
+  geom_point(aes(y=total_cases), color="grey40", alpha=0.5) +
+  geom_ribbon(aes(ymin = lo.95, ymax = hi.95), alpha=0.4) +
+  geom_line(aes(y = mean), linetype = 2, size = 1, alpha = 0.7, color="red") +
+  labs(
+    title = "UK Cases by day", x = "",
+    subtitle = "30-Day Moving Average with\n 95% Confidence Interval Bands (+/-2 Standard Deviations)"
+  ) + 
+  scale_color_tq() +
+  theme_tq() +
+  theme(
+    legend.position = "None"
+  )
+  
+```
+
+
+Now let's try this and play with a variable for the width of the rolling average called ```roll_width()``` and also perform the analysis on death data
+
+
+```{r}
+
+rollwidth <- 7
+
+# cases plot
+plot_1 <- uk_data %>%
+  tq_mutate(
+    select = total_cases,
+    mutate_fun = rollapply,
+    width = rollwidth,
+    align = "left",
+    by.column = FALSE,
+    FUN = custom_rolling_stats,
+    na.rm = TRUE
+  ) %>%
+  ggplot(aes(x = Date)) +
+  geom_point(aes(y=total_cases), color="grey40", alpha=0.5, position = 'stack') +
+  geom_ribbon(aes(ymin = lo.95, ymax = hi.95), alpha=0.4) +
+  geom_line(aes(y = mean), linetype = 1, size = 1, alpha = 0.8, color="steelblue") +
+  labs(
+    title = "UK Cases by day", x = "",
+    subtitle = "Dynamic Moving Average with\n 95% Confidence Interval Bands (+/-2 Standard Deviations)",
+    caption = "Open Data",
+    ylab = "Total Cases"
+  ) + 
+  scale_color_tq() +
+  theme_tq() +
+  theme(
+    legend.position = "None"
+  )
+
+# deaths plot
+plot_2 <- uk_data %>%
+  tq_mutate(
+    select = total_deaths,
+    mutate_fun = rollapply,
+    width = rollwidth,
+    align = "left",
+    by.column = FALSE,
+    FUN = custom_rolling_stats,
+    na.rm = TRUE
+  ) %>%
+  ggplot(aes(x = Date)) +
+  geom_point(aes(y=total_deaths), color="grey40", alpha=0.5, position = 'stack') +
+  geom_ribbon(aes(ymin = lo.95, ymax = hi.95), alpha=0.4) +
+  geom_line(aes(y = mean), linetype = 1, size = 1, alpha = 0.8, color="steelblue") +
+  labs(
+    title = "UK Deaths by day", x = "",
+    subtitle = "Dynamic Moving Average with\n 95% Confidence Interval Bands (+/-2 Standard Deviations)",
+    caption = "Open Data",
+    ylab = "Total Cases"
+  ) + 
+  scale_color_tq() +
+  theme_tq() +
+  theme(
+    legend.position = "None"
+  )
+
+grid.arrange(plot_1, plot_2, nrow=1)
+```
+
+Now let's try to normalise the x-axis and plot both on the same axis
+
+```{r}
+
+cases_roll_data <- uk_data %>%
+  tq_mutate(
+    select = total_cases,
+    mutate_fun = rollapply,
+    width = 7,
+    align = "right",
+    by.column = FALSE,
+    FUN = custom_rolling_stats,
+    na.rm = TRUE
+  )
+
+deaths_roll_data <- uk_data %>%
+  tq_mutate(
+    select = total_deaths,
+    mutate_fun = rollapply,
+    width = 7,
+    align = "right",
+    by.column = FALSE,
+    FUN = custom_rolling_stats,
+    na.rm = TRUE
+  )
+
+    
+  ggplot(NULL, aes(x = Date)) +
+  geom_point(data=cases_roll_data, aes(y=total_cases), color="grey40", alpha=0.5, position = 'stack') +
+  geom_ribbon(data=cases_roll_data, aes(ymin = lo.95, ymax = hi.95), alpha=0.4) +
+  geom_line(data=cases_roll_data, aes(y = mean), linetype = 1, size = 1, alpha = 0.8, color="steelblue") +
+  geom_line(data=deaths_roll_data, aes(y = mean), linetype = 1, size = 0.5, alpha = 0.5, color="red") +
+  geom_ribbon(data=deaths_roll_data, aes(ymin = lo.95, ymax = hi.95), alpha=0.4) +
+  labs(
+    title = "UK Cases & Deaths per day", x = "Date", y = "Cases & Deaths",
+    subtitle = "Dynamic Moving Average with\n 95% Confidence Interval Bands (+/-2 Standard Deviations)",
+    caption = "Open Data",
+    ylab = "Total Cases"
+  ) + 
+  scale_color_tq() +
+  theme_tq() +
+  theme(
+    legend.position = "None"
+  )
+```
+
+
