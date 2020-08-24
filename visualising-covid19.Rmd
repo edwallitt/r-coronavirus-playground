@@ -728,3 +728,52 @@ It is worrying that the daily number of new cases has risen to the same level as
 * Better ventilation as the weather has been very warm and people here have no air conditioning.
 
 It is therefore quite tempting to conclude the critical threshold for the second wave is going to be higher than roughly 150 people per day when the last lock-down started. I am going to venture a guess - 200-300 people per day potentially? If the trend continues, mindful that the latest dip is due to lag, then the level can be breached in 2-4 weeks time?
+
+
+## Hillingdon Cases
+
+```{r}
+pacman::p_load(
+  data.table,
+  
+)
+data_url <- "https://c19downloads.azureedge.net/downloads/csv/coronavirus-cases_latest.csv"
+raw_data <- data.table::fread(data_url, check.names = TRUE)
+hillingdon_data <- raw_data[
+  Area.name == "Hillingdon" &
+    Area.type == "ltla",,
+  ][,Specimen.date := as.Date(Specimen.date)
+    ][,c("Specimen.date","Daily.lab.confirmed.cases")][
+           order(Specimen.date)
+           ]
+hillingdon_data <- merge(hillingdon_data,
+                     data.table(Specimen.date = seq(
+                       min(hillingdon_data[,Specimen.date]),
+                       max(hillingdon_data[,Specimen.date]),
+                       by = "1 day"
+                     )), all = TRUE, by = "Specimen.date")
+setkey(hillingdon_data, Specimen.date)
+setnafill(hillingdon_data, type = "const", fill = 0,
+          cols = c("Daily.lab.confirmed.cases"))
+hillingdon_data[,roll_mean := frollmean(Daily.lab.confirmed.cases, n = 7, align = "right")]
+m_hillingdon_data <- melt(hillingdon_data, id.vars="Specimen.date",
+                      measure.vars = c("Daily.lab.confirmed.cases","roll_mean"))
+ggplot(m_hillingdon_data, aes(x = Specimen.date, y = value, fill = variable, color = variable))+
+  geom_bar(data = subset(m_hillingdon_data, variable == "Daily.lab.confirmed.cases"),
+           stat = "identity") +
+  geom_line(data = subset(m_hillingdon_data, variable == "roll_mean")) +
+  labs(x="Specimen Date", y="Number of Confirmed Cases",
+      fill = "", color = "") +
+  scale_fill_manual(values = c("#ff0000","#000000"),
+                    labels = c("Hillingdon # Daily Confirmed cases",
+                               "7 day average")) +
+  scale_color_manual(values = c("#ff0000","#000000"),
+                    labels = c("Hillingdon # Daily Confirmed cases",
+                               "7 day average")) +
+  scale_x_date(date_breaks = "2 weeks", date_labels = "%Y-%m-%d") +
+  theme_bw() %+replace% theme(legend.position = "top",
+                              legend.justification = "left")
+# ggsave(filename = "Hillingdon_COVID.png", merton_plot, width = 10, height = 6)
+```
+
+
