@@ -489,8 +489,7 @@ uk_roll_mean %>%
       title = "UK Cases per day",
       subtitle = "Showing 30 and 90 days moving averages"
     ) +
-    scale_color_tq() +
-    theme(legend.position = "none")
+    scale_color_tq()
     
 
 ```
